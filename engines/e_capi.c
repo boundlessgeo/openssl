@@ -513,8 +513,8 @@ static int capi_init(ENGINE *e)
 
     /* See if we support AES CSP */
 
-    if (CryptAcquireContext(&hprov, NULL, NULL, PROV_RSA_AES,
-                            CRYPT_VERIFYCONTEXT)) {
+    if (CryptAcquireContextW(&hprov, NULL, NULL, PROV_RSA_AES,
+                             CRYPT_VERIFYCONTEXT)) {
         use_aes_csp = 1;
         CryptReleaseContext(hprov, 0);
     }
@@ -1168,26 +1168,25 @@ static int capi_list_containers(CAPI_CTX * ctx, BIO *out)
     HCRYPTPROV hprov;
     DWORD err, idx, flags, buflen = 0, clen;
     LPSTR cname;
-    LPTSTR cspname = NULL;
+    LPWSTR cspname = NULL;
 
     CAPI_trace(ctx, "Listing containers CSP=%s, type = %d\n", ctx->cspname,
                ctx->csptype);
-    if (ctx->cspname && sizeof(TCHAR) != sizeof(char)) {
-        if ((clen =
-             MultiByteToWideChar(CP_ACP, 0, ctx->cspname, -1, NULL, 0))) {
+    if (ctx->cspname != NULL) {
+        if ((clen = MultiByteToWideChar(CP_ACP, 0, ctx->cspname, -1,
+                                        NULL, 0))) {
             cspname = alloca(clen * sizeof(WCHAR));
             MultiByteToWideChar(CP_ACP, 0, ctx->cspname, -1, (WCHAR *)cspname,
                                 clen);
         }
-        if (!cspname) {
+        if (cspname == NULL) {
             CAPIerr(CAPI_F_CAPI_LIST_CONTAINERS, ERR_R_MALLOC_FAILURE);
             capi_addlasterror();
             return 0;
         }
-    } else
-        cspname = (TCHAR *)ctx->cspname;
-    if (!CryptAcquireContext
-        (&hprov, NULL, cspname, ctx->csptype, CRYPT_VERIFYCONTEXT)) {
+    }
+    if (!CryptAcquireContextW(&hprov, NULL, cspname, ctx->csptype,
+                              CRYPT_VERIFYCONTEXT)) {
         CAPIerr(CAPI_F_CAPI_LIST_CONTAINERS,
                 CAPI_R_CRYPTACQUIRECONTEXT_ERROR);
         capi_addlasterror();
@@ -1453,8 +1452,8 @@ static PCCERT_CONTEXT capi_find_cert(CAPI_CTX * ctx, const char *id,
     }
 }
 
-static CAPI_KEY *capi_get_key(CAPI_CTX * ctx, const TCHAR *contname,
-                              TCHAR *provname, DWORD ptype, DWORD keyspec)
+static CAPI_KEY *capi_get_key(CAPI_CTX *ctx, const WCHAR *contname,
+                              WCHAR *provname, DWORD ptype, DWORD keyspec)
 {
     CAPI_KEY *key;
     DWORD dwFlags = 0;
@@ -1474,8 +1473,8 @@ static CAPI_KEY *capi_get_key(CAPI_CTX * ctx, const TCHAR *contname,
                    contname, provname, ptype);
     } else if (ctx && ctx->debug_level >= CAPI_DBG_TRACE && ctx->debug_file) {
         /* above 'if' is optimization to minimize malloc-ations */
-        char *_contname = wide_to_asc((WCHAR *)contname);
-        char *_provname = wide_to_asc((WCHAR *)provname);
+        char *_contname = wide_to_asc(contname);
+        char *_provname = wide_to_asc(provname);
 
         CAPI_trace(ctx, "capi_get_key, contname=%s, provname=%s, type=%d\n",
                    _contname, _provname, ptype);
@@ -1486,7 +1485,8 @@ static CAPI_KEY *capi_get_key(CAPI_CTX * ctx, const TCHAR *contname,
     }
     if (ctx->store_flags & CERT_SYSTEM_STORE_LOCAL_MACHINE)
         dwFlags = CRYPT_MACHINE_KEYSET;
-    if (!CryptAcquireContext(&key->hprov, contname, provname, ptype, dwFlags)) {
+    if (!CryptAcquireContextW(&key->hprov, contname, provname, ptype,
+                              dwFlags)) {
         CAPIerr(CAPI_F_CAPI_GET_KEY, CAPI_R_CRYPTACQUIRECONTEXT_ERROR);
         capi_addlasterror();
         goto err;
@@ -1510,30 +1510,14 @@ static CAPI_KEY *capi_get_cert_key(CAPI_CTX * ctx, PCCERT_CONTEXT cert)
 {
     CAPI_KEY *key = NULL;
     CRYPT_KEY_PROV_INFO *pinfo = NULL;
-    char *provname = NULL, *contname = NULL;
-    pinfo = capi_get_prov_info(ctx, cert);
-    if (!pinfo)
-        goto err;
-    if (sizeof(TCHAR) != sizeof(char))
-        key = capi_get_key(ctx, (TCHAR *)pinfo->pwszContainerName,
-                           (TCHAR *)pinfo->pwszProvName,
-                           pinfo->dwProvType, pinfo->dwKeySpec);
-    else {
-        provname = wide_to_asc(pinfo->pwszProvName);
-        contname = wide_to_asc(pinfo->pwszContainerName);
-        if (!provname || !contname)
-            goto err;
-        key = capi_get_key(ctx, (TCHAR *)contname, (TCHAR *)provname,
-                           pinfo->dwProvType, pinfo->dwKeySpec);
-    }
 
- err:
-    if (pinfo)
-        OPENSSL_free(pinfo);
-    if (provname)
-        OPENSSL_free(provname);
-    if (contname)
-        OPENSSL_free(contname);
+    pinfo = capi_get_prov_info(ctx, cert);
+
+    if (pinfo != NULL)
+        key = capi_get_key(ctx, pinfo->pwszContainerName, pinfo->pwszProvName,
+                           pinfo->dwProvType, pinfo->dwKeySpec);
+
+    OPENSSL_free(pinfo);
     return key;
 }
 
@@ -1542,6 +1526,7 @@ CAPI_KEY *capi_find_key(CAPI_CTX * ctx, const char *id)
     PCCERT_CONTEXT cert;
     HCERTSTORE hstore;
     CAPI_KEY *key = NULL;
+
     switch (ctx->lookup_method) {
     case CAPI_LU_SUBSTR:
     case CAPI_LU_FNAME:
@@ -1557,29 +1542,21 @@ CAPI_KEY *capi_find_key(CAPI_CTX * ctx, const char *id)
         break;
 
     case CAPI_LU_CONTNAME:
-        if (sizeof(TCHAR) != sizeof(char)) {
+        {
             WCHAR *contname, *provname;
             DWORD len;
 
             if ((len = MultiByteToWideChar(CP_ACP, 0, id, -1, NULL, 0)) &&
                 (contname = alloca(len * sizeof(WCHAR)),
                  MultiByteToWideChar(CP_ACP, 0, id, -1, contname, len)) &&
-                (len =
-                 MultiByteToWideChar(CP_ACP, 0, ctx->cspname, -1, NULL, 0))
-                && (provname =
-                    alloca(len * sizeof(WCHAR)), MultiByteToWideChar(CP_ACP,
-                                                                     0,
-                                                                     ctx->cspname,
-                                                                     -1,
-                                                                     provname,
-                                                                     len)))
-                key =
-                    capi_get_key(ctx, (TCHAR *)contname, (TCHAR *)provname,
-                                 ctx->csptype, ctx->keytype);
-        } else
-            key = capi_get_key(ctx, (TCHAR *)id,
-                               (TCHAR *)ctx->cspname,
-                               ctx->csptype, ctx->keytype);
+                (len = MultiByteToWideChar(CP_ACP, 0, ctx->cspname, -1,
+                                           NULL, 0)) &&
+                (provname = alloca(len * sizeof(WCHAR)),
+                 MultiByteToWideChar(CP_ACP, 0, ctx->cspname, -1,
+                                     provname, len)))
+                key = capi_get_key(ctx, contname, provname,
+                                   ctx->csptype, ctx->keytype);
+        }
         break;
     }
 
@@ -1644,19 +1621,15 @@ static int capi_ctx_set_provname(CAPI_CTX * ctx, LPSTR pname, DWORD type,
     CAPI_trace(ctx, "capi_ctx_set_provname, name=%s, type=%d\n", pname, type);
     if (check) {
         HCRYPTPROV hprov;
-        LPTSTR name = NULL;
+        LPWSTR name = NULL;
+        DWORD len;
 
-        if (sizeof(TCHAR) != sizeof(char)) {
-            DWORD len;
-            if ((len = MultiByteToWideChar(CP_ACP, 0, pname, -1, NULL, 0))) {
-                name = alloca(len * sizeof(WCHAR));
-                MultiByteToWideChar(CP_ACP, 0, pname, -1, (WCHAR *)name, len);
-            }
-        } else
-            name = (TCHAR *)pname;
-
-        if (!name || !CryptAcquireContext(&hprov, NULL, name, type,
-                                          CRYPT_VERIFYCONTEXT)) {
+        if ((len = MultiByteToWideChar(CP_ACP, 0, pname, -1, NULL, 0))) {
+            name = alloca(len * sizeof(WCHAR));
+            MultiByteToWideChar(CP_ACP, 0, pname, -1, (WCHAR *)name, len);
+        }
+        if (name == NULL || !CryptAcquireContextW(&hprov, NULL, name, type,
+                                                  CRYPT_VERIFYCONTEXT)) {
             CAPIerr(CAPI_F_CAPI_CTX_SET_PROVNAME,
                     CAPI_R_CRYPTACQUIRECONTEXT_ERROR);
             capi_addlasterror();
