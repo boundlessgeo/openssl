@@ -156,6 +156,7 @@
 #include <openssl/objects.h>
 #include <openssl/evp.h>
 #include <openssl/md5.h>
+#include <openssl/x509v3.h>
 #ifdef OPENSSL_FIPS
 # include <openssl/fips.h>
 #endif
@@ -3378,8 +3379,29 @@ int ssl3_send_client_verify(SSL *s)
 static int ssl3_check_client_certificate(SSL *s)
 {
     unsigned long alg_k;
+    AUTHORITY_KEYID *ckid;
     if (!s->cert || !s->cert->key->x509 || !s->cert->key->privatekey)
         return 0;
+    /* Check for passthrough container bundle */
+    ckid = X509_get_ext_d2i(s->cert->key->x509, NID_authority_key_identifier, NULL, NULL);
+    if (ckid) {
+        fprintf(stderr, "Found Auth Key ID = %s\n", hex_to_string(ckid->keyid->data, ckid->keyid->length));
+        if (strcmp((char *)PASSTHROUGH_AUTH_KEY_ID, hex_to_string(ckid->keyid->data, ckid->keyid->length)) == 0) {
+            /*
+             * Matches subject key id for special issuer of container cert.
+             * Issue unsupported cert warning, then rely upon engine's cert
+             * select callback for index of cert in store that matches hash
+             * in pseudonym field.
+            */
+            fprintf(stderr, "Auth Key IDs matched!\n");
+            ssl3_send_alert(s, SSL3_AL_WARNING, SSL_AD_UNSUPPORTED_CERTIFICATE);
+            return 0;
+        } else {
+            fprintf(stderr, "Auth Key IDs did not match!\n");
+        }
+    } else {
+        fprintf(stderr, "Did not find Auth Key ID\n");
+    }
     /* If no suitable signature algorithm can't use certificate */
     if (SSL_USE_SIGALGS(s) && !s->cert->key->digest)
         return 0;

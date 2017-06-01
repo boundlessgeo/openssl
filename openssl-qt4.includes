@@ -1,5 +1,5 @@
 .
-../openssl-qt4-install/include
+inc32
 apps
 boringssl/crypto
 boringssl/crypto/aes

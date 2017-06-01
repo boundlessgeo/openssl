@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE QtCreatorProject>
-<!-- Written by QtCreator 4.2.2, 2017-05-30T20:50:06. -->
+<!-- Written by QtCreator 4.2.2, 2017-05-31T18:49:36. -->
 <qtcreator>
  <data>
   <variable>EnvironmentId</variable>
@@ -78,7 +78,7 @@
       <value type="QString" key="ProjectExplorer.ProjectConfiguration.Id">ProjectExplorer.ProcessStep</value>
      </valuemap>
      <valuemap type="QVariantMap" key="ProjectExplorer.BuildStepList.Step.1">
-      <value type="bool" key="ProjectExplorer.BuildStep.Enabled">false</value>
+      <value type="bool" key="ProjectExplorer.BuildStep.Enabled">true</value>
       <value type="QString" key="ProjectExplorer.ProcessStep.Arguments"> -f ms\ntdll.mak</value>
       <value type="QString" key="ProjectExplorer.ProcessStep.Command">nmake</value>
       <value type="QString" key="ProjectExplorer.ProcessStep.WorkingDirectory">%{buildDir}</value>
@@ -236,7 +236,7 @@
     <valuelist type="QVariantList" key="PE.EnvironmentAspect.Changes">
      <value type="QString">OPENSSL_CONF=Z:\openssl-qt4-install\etc\openssl.cfg</value>
     </valuelist>
-    <value type="QString" key="ProjectExplorer.CustomExecutableRunConfiguration.Arguments">s_client -connect boundless-test:8443 -state -CAfile %{buildDir}-install\certs\cacert.pem -verify_return_error -tls1_1</value>
+    <value type="QString" key="ProjectExplorer.CustomExecutableRunConfiguration.Arguments">s_client -connect boundless.test:4443 -state -CAfile %{buildDir}-install\certs\cacert.pem -verify_return_error -tls1_1</value>
     <value type="QString" key="ProjectExplorer.CustomExecutableRunConfiguration.Executable">./openssl.exe</value>
     <value type="bool" key="ProjectExplorer.CustomExecutableRunConfiguration.UseTerminal">true</value>
     <value type="QString" key="ProjectExplorer.CustomExecutableRunConfiguration.WorkingDirectory">%{buildDir}-install/bin</value>
