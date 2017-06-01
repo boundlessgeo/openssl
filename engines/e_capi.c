@@ -137,6 +137,7 @@
 # include <openssl/engine.h>
 # include <openssl/pem.h>
 # include <openssl/x509v3.h>
+# include "ssl_locl.h"
 
 # include "e_capi_err.h"
 # include "e_capi_err.c"
@@ -183,6 +184,7 @@ static int capi_load_ssl_client_cert(ENGINE *e, SSL *ssl,
                                      UI_METHOD *ui_method,
                                      void *callback_data);
 
+static int cert_get_passthrough_index(ENGINE *e, SSL *ssl, STACK_OF(X509) *certs);
 static int cert_select_simple(ENGINE *e, SSL *ssl, STACK_OF(X509) *certs);
 # ifdef OPENSSL_CAPIENG_DIALOG
 static int cert_select_dialog(ENGINE *e, SSL *ssl, STACK_OF(X509) *certs);
@@ -1780,10 +1782,57 @@ static int capi_load_ssl_client_cert(ENGINE *e, SSL *ssl,
 
 }
 
+/*
+ * Check for passthrough container bundle.
+ * The client cert is a special dummy container that has the MD5 hash
+ * (in its pseudonym field) for the correct certificate in the Win cert store.
+ * Authority Key ID of client cert must match that of special signing issuer
+ */
+static int cert_get_passthrough_index(ENGINE *e, SSL *ssl, STACK_OF(X509) *certs)
+{
+    AUTHORITY_KEYID *ckid;
+    /* Check for passthrough container bundle */
+    ckid = X509_get_ext_d2i(ssl->cert->key->x509, NID_authority_key_identifier, NULL, NULL);
+    if (!ckid) {
+        fprintf(stderr, "Did not find passthrough Auth Key ID\n");
+        return -1;
+    }
+
+    fprintf(stderr, "Found passthrough Auth Key ID = %s\n", hex_to_string(ckid->keyid->data, ckid->keyid->length));
+    if (strcmp((char *)PASSTHROUGH_AUTH_KEY_ID, hex_to_string(ckid->keyid->data, ckid->keyid->length)) != 0) {
+        fprintf(stderr, "Passthrough Auth Key IDs did not match!\n");
+        return -1;
+    }
+
+    /*
+     * Matches subject key id for special issuer of container cert.
+     * Issue unsupported cert warning, then rely upon engine's cert
+     * select callback for index of cert in store that matches hash
+     * in pseudonym field.
+    */
+    fprintf(stderr, "Passthrough Auth Key IDs matched!\n");
+
+    /* Fetch the hash from pseudonym field */
+
+    /* Find cert by hash in store */
+
+    /* Return index of cert in store */
+
+    return -1;
+}
+
 /* Simple client cert selection function: always select first */
 
 static int cert_select_simple(ENGINE *e, SSL *ssl, STACK_OF(X509) *certs)
 {
+    int idx = -1;
+    idx = cert_get_passthrough_index(e, ssl, certs);
+    if (idx < -1) {
+        return -1;
+    } else if (idx >= 0) {
+        return idx;
+    }
+
     return 0;
 }
 
@@ -1818,6 +1867,14 @@ static int cert_select_dialog(ENGINE *e, SSL *ssl, STACK_OF(X509) *certs)
     CAPI_KEY *key;
     HWND hwnd;
     int i, idx = -1;
+
+    idx = cert_get_passthrough_index(e, ssl, certs);
+    if (idx < -1) {
+        return -1;
+    } else if (idx >= 0) {
+        return idx;
+    }
+
     if (sk_X509_num(certs) == 1)
         return 0;
     ctx = ENGINE_get_ex_data(e, capi_idx);
