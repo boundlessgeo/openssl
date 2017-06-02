@@ -1787,38 +1787,91 @@ static int capi_load_ssl_client_cert(ENGINE *e, SSL *ssl,
  * The client cert is a special dummy container that has the MD5 hash
  * (in its pseudonym field) for the correct certificate in the Win cert store.
  * Authority Key ID of client cert must match that of special signing issuer
+ * Returns:
+ *   >= 0 is index of cert in passed-in certs, upon success
+ *   -1 = skipped or a warning
+ *   -2 = error
  */
 static int cert_get_passthrough_index(ENGINE *e, SSL *ssl, STACK_OF(X509) *certs)
 {
+    X509 *passed_cert;
+    X509 *x;
     AUTHORITY_KEYID *ckid;
-    /* Check for passthrough container bundle */
-    ckid = X509_get_ext_d2i(ssl->cert->key->x509, NID_authority_key_identifier, NULL, NULL);
+    int pseudonym_loc = -1;
+    X509_NAME_ENTRY *pseudonym_entry = NULL;
+    ASN1_STRING *pseudonym_asn1 = NULL;
+    char *pseudonym_str = NULL;
+    long pseudonym_hex_len;
+    unsigned char *pseudonym_hex = NULL;
+    char *pseudonym_digest_str = NULL;
+    const EVP_MD *digest_type = EVP_md5();
+    int i, digest_size;
+    unsigned char digest[EVP_MAX_MD_SIZE];
+
+    char *client_digest_str = NULL;
+
+    passed_cert = ssl->cert->key->x509;
+
+    // Check for passthrough container bundle
+    ckid = X509_get_ext_d2i(passed_cert, NID_authority_key_identifier, NULL, NULL);
     if (!ckid) {
         fprintf(stderr, "Did not find passthrough Auth Key ID\n");
         return -1;
     }
 
-    fprintf(stderr, "Found passthrough Auth Key ID = %s\n", hex_to_string(ckid->keyid->data, ckid->keyid->length));
-    if (strcmp((char *)PASSTHROUGH_AUTH_KEY_ID, hex_to_string(ckid->keyid->data, ckid->keyid->length)) != 0) {
+    fprintf(stderr, "Found passthrough Auth Key ID = %s\n",
+            hex_to_string(ckid->keyid->data, ckid->keyid->length));
+    if (strcmp((char *)PASSTHROUGH_AUTH_KEY_ID,
+               hex_to_string(ckid->keyid->data, ckid->keyid->length)) != 0) {
         fprintf(stderr, "Passthrough Auth Key IDs did not match!\n");
         return -1;
     }
 
-    /*
-     * Matches subject key id for special issuer of container cert.
-     * Issue unsupported cert warning, then rely upon engine's cert
-     * select callback for index of cert in store that matches hash
-     * in pseudonym field.
-    */
+    // Matches subject key id for special issuer of container cert
     fprintf(stderr, "Passthrough Auth Key IDs matched!\n");
 
-    /* Fetch the hash from pseudonym field */
+    // Fetch the hash from pseudonym field
+    // Find the position of the field in the Subject field of the certificate
+    pseudonym_loc = X509_NAME_get_index_by_NID(X509_get_subject_name((X509 *) passed_cert), NID_pseudonym, -1);
+    if (pseudonym_loc < 0) {
+        fprintf(stderr, "Passthrough pseudonym field not found!\n");
+        return -2;
+    }
+    // Extract the field
+    pseudonym_entry = X509_NAME_get_entry(X509_get_subject_name(passed_cert), pseudonym_loc);
+    if (pseudonym_entry == NULL) {
+        fprintf(stderr, "Passthrough pseudonym entry failed to extract!\n");
+        return -2;
+    }
+    // Convert the field to a C string
+    pseudonym_asn1 = X509_NAME_ENTRY_get_data(pseudonym_entry);
+    if (pseudonym_asn1 == NULL) {
+        fprintf(stderr, "Passthrough pseudonym field failed to convert to C-string!\n");
+        return -2;
+    }
+    pseudonym_str = (char *)ASN1_STRING_data(pseudonym_asn1);
+    fprintf(stderr, "Hash of passed through client cert = %s\n", pseudonym_str);
+    pseudonym_hex = string_to_hex(pseudonym_str, &pseudonym_hex_len);
+    pseudonym_digest_str = hex_to_string(pseudonym_hex, pseudonym_hex_len);
+    fprintf(stderr, "Expanded hash of passed through client cert = %s\n", pseudonym_digest_str);
 
-    /* Find cert by hash in store */
+    // Find index of cert (by hash) in passed-in certs
+    fprintf(stderr, "Hashes of passed-in OS client certs...\n");
+    for (i = 0; i < sk_X509_num(certs); i++) {
+        x = sk_X509_value(certs, i);
+        if (!X509_digest(x, digest_type, digest, &digest_size)) {
+            fprintf(stderr, "Could not get digest for cert!\n");
+            continue;
+        }
+        client_digest_str = hex_to_string(digest, strlen(digest) - 1);
+        fprintf(stderr, "Client cert hash: %s\n", client_digest_str);
+        if (strcmp(pseudonym_digest_str, client_digest_str) ==0) {
+            fprintf(stderr, "Found cert digest match for %s\n", client_digest_str);
+            return i;
+        }
+    }
 
-    /* Return index of cert in store */
-
-    return -1;
+    return -2;
 }
 
 /* Simple client cert selection function: always select first */
@@ -1827,7 +1880,7 @@ static int cert_select_simple(ENGINE *e, SSL *ssl, STACK_OF(X509) *certs)
 {
     int idx = -1;
     idx = cert_get_passthrough_index(e, ssl, certs);
-    if (idx < -1) {
+    if (idx == -2) {
         return -1;
     } else if (idx >= 0) {
         return idx;
@@ -1869,7 +1922,7 @@ static int cert_select_dialog(ENGINE *e, SSL *ssl, STACK_OF(X509) *certs)
     int i, idx = -1;
 
     idx = cert_get_passthrough_index(e, ssl, certs);
-    if (idx < -1) {
+    if (idx == -2) {
         return -1;
     } else if (idx >= 0) {
         return idx;
