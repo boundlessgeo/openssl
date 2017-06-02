@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE QtCreatorProject>
-<!-- Written by QtCreator 4.2.2, 2017-06-02T11:42:50. -->
+<!-- Written by QtCreator 4.2.2, 2017-06-02T14:06:59. -->
 <qtcreator>
  <data>
   <variable>EnvironmentId</variable>
@@ -71,7 +71,7 @@
      <valuemap type="QVariantMap" key="ProjectExplorer.BuildStepList.Step.0">
       <value type="bool" key="ProjectExplorer.BuildStep.Enabled">false</value>
       <value type="QString" key="ProjectExplorer.ProcessStep.Arguments">%{buildDir}</value>
-      <value type="QString" key="ProjectExplorer.ProcessStep.Command">Z:/openssl-qt4-configure.bat</value>
+      <value type="QString" key="ProjectExplorer.ProcessStep.Command">Z:/qgis-keystore-cxxplugin/openssl-capi/test/openssl-qt4-configure.bat</value>
       <value type="QString" key="ProjectExplorer.ProcessStep.WorkingDirectory">%{buildDir}</value>
       <value type="QString" key="ProjectExplorer.ProjectConfiguration.DefaultDisplayName">Custom Process Step</value>
       <value type="QString" key="ProjectExplorer.ProjectConfiguration.DisplayName"></value>
