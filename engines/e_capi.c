@@ -1794,84 +1794,116 @@ static int capi_load_ssl_client_cert(ENGINE *e, SSL *ssl,
  */
 static int cert_get_passthrough_index(ENGINE *e, SSL *ssl, STACK_OF(X509) *certs)
 {
-    X509 *passed_cert;
-    X509 *x;
-    AUTHORITY_KEYID *ckid;
-    int pseudonym_loc = -1;
+    BIO *out = NULL;
+    AUTHORITY_KEYID *ckid = NULL;
+    X509 *passed_cert = NULL;
+    X509 *client_cert = NULL;
     X509_NAME_ENTRY *pseudonym_entry = NULL;
     ASN1_STRING *pseudonym_asn1 = NULL;
-    char *pseudonym_str = NULL;
-    long pseudonym_hex_len;
+    const EVP_MD *digest_type = NULL;
+    char *auth_key_str = NULL, *pseudonym_str = NULL;
+    char *pseudonym_digest_str = NULL, *client_digest_str = NULL;
     unsigned char *pseudonym_hex = NULL;
-    char *pseudonym_digest_str = NULL;
-    const EVP_MD *digest_type = EVP_md5();
-    int i, digest_size;
     unsigned char digest[EVP_MAX_MD_SIZE];
+    int ret = -1, pseudonym_loc = -1, i, digest_size;
+    long pseudonym_hex_len;
 
-    char *client_digest_str = NULL;
-
+    out  = BIO_new_fp(stdout, BIO_NOCLOSE);
     passed_cert = ssl->cert->key->x509;
 
     // Check for passthrough container bundle
     ckid = X509_get_ext_d2i(passed_cert, NID_authority_key_identifier, NULL, NULL);
     if (!ckid) {
-        fprintf(stderr, "Did not find passthrough Auth Key ID\n");
-        return -1;
+        BIO_printf(out, "Did not find passthrough Auth Key ID\n");
+        goto missing;
     }
 
-    fprintf(stderr, "Found passthrough Auth Key ID = %s\n",
-            hex_to_string(ckid->keyid->data, ckid->keyid->length));
-    if (strcmp((char *)PASSTHROUGH_AUTH_KEY_ID,
-               hex_to_string(ckid->keyid->data, ckid->keyid->length)) != 0) {
-        fprintf(stderr, "Passthrough Auth Key IDs did not match!\n");
-        return -1;
+    auth_key_str = hex_to_string(ckid->keyid->data, ckid->keyid->length);
+    BIO_printf(out, "Found passthrough Auth Key ID = %s\n", auth_key_str);
+    if (strcmp((char *)PASSTHROUGH_AUTH_KEY_ID, auth_key_str) != 0) {
+        BIO_printf(out, "Passthrough Auth Key IDs did not match!\n");
+        goto missing;
     }
 
     // Matches subject key id for special issuer of container cert
-    fprintf(stderr, "Passthrough Auth Key IDs matched!\n");
+    BIO_printf(out, "Passthrough Auth Key IDs matched!\n");
 
     // Fetch the hash from pseudonym field
     // Find the position of the field in the Subject field of the certificate
     pseudonym_loc = X509_NAME_get_index_by_NID(X509_get_subject_name((X509 *) passed_cert), NID_pseudonym, -1);
     if (pseudonym_loc < 0) {
-        fprintf(stderr, "Passthrough pseudonym field not found!\n");
-        return -2;
+        BIO_printf(out, "Passthrough pseudonym field not found!\n");
+        goto err;
     }
     // Extract the field
     pseudonym_entry = X509_NAME_get_entry(X509_get_subject_name(passed_cert), pseudonym_loc);
     if (pseudonym_entry == NULL) {
-        fprintf(stderr, "Passthrough pseudonym entry failed to extract!\n");
-        return -2;
+        BIO_printf(out, "Passthrough pseudonym entry failed to extract!\n");
+        goto err;
     }
     // Convert the field to a C string
     pseudonym_asn1 = X509_NAME_ENTRY_get_data(pseudonym_entry);
     if (pseudonym_asn1 == NULL) {
-        fprintf(stderr, "Passthrough pseudonym field failed to convert to C-string!\n");
-        return -2;
+        BIO_printf(out, "Passthrough pseudonym field failed to convert to C-string!\n");
+        goto err;
     }
     pseudonym_str = (char *)ASN1_STRING_data(pseudonym_asn1);
-    fprintf(stderr, "Hash of passed through client cert = %s\n", pseudonym_str);
+    BIO_printf(out, "Hash of passed through client cert = %s\n", pseudonym_str);
     pseudonym_hex = string_to_hex(pseudonym_str, &pseudonym_hex_len);
     pseudonym_digest_str = hex_to_string(pseudonym_hex, pseudonym_hex_len);
-    fprintf(stderr, "Expanded hash of passed through client cert = %s\n", pseudonym_digest_str);
+    BIO_printf(out, "Expanded hash of passed through client cert = %s\n", pseudonym_digest_str);
 
     // Find index of cert (by hash) in passed-in certs
-    fprintf(stderr, "Hashes of passed-in OS client certs...\n");
+    digest_type = EVP_md5();
+    BIO_printf(out, "Hashes of passed-in OS client certs...\n");
     for (i = 0; i < sk_X509_num(certs); i++) {
-        x = sk_X509_value(certs, i);
-        if (!X509_digest(x, digest_type, digest, &digest_size)) {
-            fprintf(stderr, "Could not get digest for cert!\n");
+        client_cert = sk_X509_value(certs, i);
+        if (!X509_digest(client_cert, digest_type, digest, &digest_size)) {
+            BIO_printf(out, "Could not get digest for cert!\n");
             continue;
         }
-        client_digest_str = hex_to_string(digest, strlen(digest) - 1);
-        fprintf(stderr, "Client cert hash: %s\n", client_digest_str);
+        if (strlen(digest) < 1) {
+            BIO_printf(out, "Client cert hash empty!\n");
+            continue;
+        }
+        client_digest_str = hex_to_string(digest, strlen(digest));
+        BIO_printf(out, "Client cert hash: %s\n", client_digest_str);
         if (strcmp(pseudonym_digest_str, client_digest_str) ==0) {
-            fprintf(stderr, "Found cert digest match for %s\n", client_digest_str);
-            return i;
+            BIO_printf(out, "Found cert digest match for %s\n", client_digest_str);
+            ret = i;
+            goto done;
         }
     }
 
-    return -2;
+err:
+    ret = -2;
+    goto done;
+
+missing:
+    ret = -1;
+    goto done;
+
+done:
+    BIO_free_all(out);
+    if (ckid != NULL)
+        AUTHORITY_KEYID_free(ckid);
+    // certs don't get freed here
+    if (pseudonym_entry != NULL)
+        X509_NAME_ENTRY_free(pseudonym_entry);
+    if (pseudonym_asn1 != NULL)
+        ASN1_STRING_free(pseudonym_asn1);
+    if (auth_key_str != NULL)
+        OPENSSL_free(auth_key_str);
+    if (pseudonym_str != NULL)
+        OPENSSL_free(pseudonym_str);
+    if (pseudonym_digest_str != NULL)
+        OPENSSL_free(pseudonym_digest_str);
+    if (client_digest_str != NULL)
+        OPENSSL_free(client_digest_str);
+    if (pseudonym_hex != NULL)
+        OPENSSL_free(pseudonym_hex);
+
+    return (ret);
 }
 
 /* Simple client cert selection function: always select first */
