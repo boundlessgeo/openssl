@@ -1795,7 +1795,7 @@ static int capi_load_ssl_client_cert(ENGINE *e, SSL *ssl,
 static int cert_get_passthrough_index(ENGINE *e, SSL *ssl, STACK_OF(X509) *certs)
 {
     BIO *out = NULL;
-    AUTHORITY_KEYID *ckid = NULL;
+    AUTHORITY_KEYID *ckid;
     X509 *passed_cert = NULL;
     X509 *client_cert = NULL;
     X509_NAME_ENTRY *pseudonym_entry = NULL;
@@ -1867,18 +1867,9 @@ missing:
     goto done;
 
 done:
-    BIO_free_all(out);
-    if (ckid != NULL)
-        AUTHORITY_KEYID_free(ckid);
-    // certs don't get freed here
-    if (pseudonym_entry != NULL)
-        X509_NAME_ENTRY_free(pseudonym_entry);
-    if (pseudonym_asn1 != NULL)
-        ASN1_STRING_free(pseudonym_asn1);
+    BIO_free(out);
     if (auth_key_str != NULL)
         OPENSSL_free(auth_key_str);
-    if (pseudonym_hash_str != NULL)
-        OPENSSL_free(pseudonym_hash_str);
     if (client_hash_str != NULL)
         OPENSSL_free(client_hash_str);
 
