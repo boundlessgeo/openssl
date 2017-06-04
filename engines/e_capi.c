@@ -1870,7 +1870,8 @@ missing:
     goto done;
 
 done:
-    BIO_free(out);
+    if (out != NULL)
+        BIO_free(out);
     if (auth_key_str != NULL)
         OPENSSL_free(auth_key_str);
     if (client_hash_str != NULL)
