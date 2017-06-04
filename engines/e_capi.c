@@ -1803,6 +1803,9 @@ static int cert_get_passthrough_index(ENGINE *e, SSL *ssl, STACK_OF(X509) *certs
     char *auth_key_str = NULL, *pseudonym_hash_str = NULL, *client_hash_str = NULL;
     int ret = -1, pseudonym_loc = -1, i;
 
+    if (!ssl->cert || !ssl->cert->key->x509)
+        goto missing;
+
     out  = BIO_new_fp(stdout, BIO_NOCLOSE);
     passed_cert = ssl->cert->key->x509;
 
@@ -1852,7 +1855,7 @@ static int cert_get_passthrough_index(ENGINE *e, SSL *ssl, STACK_OF(X509) *certs
         client_hash_str = hex_to_string(client_cert->sha1_hash, strlen(client_cert->sha1_hash));
         BIO_printf(out, "  %s\n", client_hash_str);
         if (!memcmp(pseudonym_hash_str, client_hash_str, sizeof(pseudonym_hash_str))) {
-            BIO_printf(out, "  found SHA1 hash match for passthrough client cert\n");
+            BIO_printf(out, "  ^ found SHA1 hash match for passthrough client cert\n");
             ret = i;
             goto done;
         }
