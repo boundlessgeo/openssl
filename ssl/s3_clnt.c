@@ -3385,22 +3385,17 @@ static int ssl3_check_client_certificate(SSL *s)
     /* Check for passthrough container bundle */
     ckid = X509_get_ext_d2i(s->cert->key->x509, NID_authority_key_identifier, NULL, NULL);
     if (ckid) {
-        //fprintf(stderr, "Found Auth Key ID = %s\n", hex_to_string(ckid->keyid->data, ckid->keyid->length));
+        //fprintf(stdout, "Found Auth Key ID = %s\n", hex_to_string(ckid->keyid->data, ckid->keyid->length));
         if (strcmp((char *)PASSTHROUGH_AUTH_KEY_ID, hex_to_string(ckid->keyid->data, ckid->keyid->length)) == 0) {
             /*
              * Matches subject key id for special issuer of container cert.
-             * Issue "unsupported cert" warning, then rely upon engine's cert
-             * select callback for index of cert in store that matches hash
-             * in pseudonym field of subject info.
+             * Pass through cert bundle, then rely upon engine's cert select
+             * callback for index of cert in store that matches hash in
+             * pseudonym field of subject info.
             */
-            //fprintf(stderr, "Auth Key IDs matched!\n");
-            ssl3_send_alert(s, SSL3_AL_WARNING, SSL_AD_UNSUPPORTED_CERTIFICATE);
+            fprintf(stdout, "Auth Key ID matched; passing client cert bundle through to engine\n");
             return 0;
-        } else {
-            //fprintf(stderr, "Auth Key IDs did not match!\n");
         }
-    } else {
-        //fprintf(stderr, "Did not find Auth Key ID\n");
     }
     /* If no suitable signature algorithm can't use certificate */
     if (SSL_USE_SIGALGS(s) && !s->cert->key->digest)
