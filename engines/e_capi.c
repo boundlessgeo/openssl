@@ -1800,13 +1800,8 @@ static int cert_get_passthrough_index(ENGINE *e, SSL *ssl, STACK_OF(X509) *certs
     X509 *client_cert = NULL;
     X509_NAME_ENTRY *pseudonym_entry = NULL;
     ASN1_STRING *pseudonym_asn1 = NULL;
-    const EVP_MD *digest_type = NULL;
-    char *auth_key_str = NULL, *pseudonym_str = NULL;
-    char *pseudonym_digest_str = NULL, *client_digest_str = NULL;
-    unsigned char *pseudonym_hex = NULL;
-    unsigned char digest[EVP_MAX_MD_SIZE];
-    int ret = -1, pseudonym_loc = -1, i, digest_size;
-    long pseudonym_hex_len;
+    char *auth_key_str = NULL, *pseudonym_hash_str = NULL, *client_hash_str = NULL;
+    int ret = -1, pseudonym_loc = -1, i;
 
     out  = BIO_new_fp(stdout, BIO_NOCLOSE);
     passed_cert = ssl->cert->key->x509;
@@ -1847,29 +1842,17 @@ static int cert_get_passthrough_index(ENGINE *e, SSL *ssl, STACK_OF(X509) *certs
         BIO_printf(out, "Passthrough pseudonym field failed to convert to C-string!\n");
         goto err;
     }
-    pseudonym_str = (char *)ASN1_STRING_data(pseudonym_asn1);
-    BIO_printf(out, "Hash of passed through client cert = %s\n", pseudonym_str);
-    pseudonym_hex = string_to_hex(pseudonym_str, &pseudonym_hex_len);
-    pseudonym_digest_str = hex_to_string(pseudonym_hex, pseudonym_hex_len);
-    BIO_printf(out, "Expanded hash of passed through client cert = %s\n", pseudonym_digest_str);
+    pseudonym_hash_str = (char *)ASN1_STRING_data(pseudonym_asn1);
+    BIO_printf(out, "Passed through client cert SHA1 hash = %s\n", pseudonym_hash_str);
 
     // Find index of cert (by hash) in passed-in certs
-    digest_type = EVP_md5();
-    BIO_printf(out, "Hashes of passed-in OS client certs...\n");
+    BIO_printf(out, "Checking hashes of OS client certs...\n");
     for (i = 0; i < sk_X509_num(certs); i++) {
         client_cert = sk_X509_value(certs, i);
-        if (!X509_digest(client_cert, digest_type, digest, &digest_size)) {
-            BIO_printf(out, "Could not get digest for cert!\n");
-            continue;
-        }
-        if (strlen(digest) < 1) {
-            BIO_printf(out, "Client cert hash empty!\n");
-            continue;
-        }
-        client_digest_str = hex_to_string(digest, strlen(digest));
-        BIO_printf(out, "Client cert hash: %s\n", client_digest_str);
-        if (strcmp(pseudonym_digest_str, client_digest_str) ==0) {
-            BIO_printf(out, "Found cert digest match for %s\n", client_digest_str);
+        client_hash_str = hex_to_string(client_cert->sha1_hash, strlen(client_cert->sha1_hash));
+        BIO_printf(out, "  %s\n", client_hash_str);
+        if (!memcmp(pseudonym_hash_str, client_hash_str, sizeof(pseudonym_hash_str))) {
+            BIO_printf(out, "  found SHA1 hash match for passthrough client cert\n");
             ret = i;
             goto done;
         }
@@ -1894,14 +1877,10 @@ done:
         ASN1_STRING_free(pseudonym_asn1);
     if (auth_key_str != NULL)
         OPENSSL_free(auth_key_str);
-    if (pseudonym_str != NULL)
-        OPENSSL_free(pseudonym_str);
-    if (pseudonym_digest_str != NULL)
-        OPENSSL_free(pseudonym_digest_str);
-    if (client_digest_str != NULL)
-        OPENSSL_free(client_digest_str);
-    if (pseudonym_hex != NULL)
-        OPENSSL_free(pseudonym_hex);
+    if (pseudonym_hash_str != NULL)
+        OPENSSL_free(pseudonym_hash_str);
+    if (client_hash_str != NULL)
+        OPENSSL_free(client_hash_str);
 
     return (ret);
 }
