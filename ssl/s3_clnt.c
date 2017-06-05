@@ -3379,24 +3379,24 @@ int ssl3_send_client_verify(SSL *s)
 static int ssl3_check_client_certificate(SSL *s)
 {
     unsigned long alg_k;
-    AUTHORITY_KEYID *ckid;
+    char buf[256];
+    char *issuer_name_line = NULL;
     if (!s->cert || !s->cert->key->x509 || !s->cert->key->privatekey)
         return 0;
-    /* Check for passthrough container bundle */
-    ckid = X509_get_ext_d2i(s->cert->key->x509, NID_authority_key_identifier, NULL, NULL);
-    if (ckid) {
-        //fprintf(stdout, "Found Auth Key ID = %s\n", hex_to_string(ckid->keyid->data, ckid->keyid->length));
-        if (strcmp((char *)PASSTHROUGH_AUTH_KEY_ID, hex_to_string(ckid->keyid->data, ckid->keyid->length)) == 0) {
-            /*
-             * Matches subject key id for special issuer of container cert.
-             * Pass through cert bundle, then rely upon engine's cert select
-             * callback for index of cert in store that matches hash in
-             * pseudonym field of subject info.
-            */
-            fprintf(stdout, "Auth Key ID matched; passing client cert bundle through to engine\n");
-            return 0;
-        }
+    // Check for passthrough container bundle
+    issuer_name_line = X509_NAME_oneline(X509_get_issuer_name(s->cert->key->x509), buf, sizeof buf);
+    if (strcmp((char *)PASSTHROUGH_CA_NAME, issuer_name_line) == 0) {
+        /*
+         * Matches issuer name for special issuer of container cert.
+         * Pass through cert bundle, then rely upon engine's cert select
+         * callback for index of cert in store that matches hash in
+         * common name field of subject info.
+        */
+        fprintf(stdout, "Passthrough CA name matched; passing client cert bundle through to engine\n");
+        return 0;
     }
+    if (issuer_name_line != NULL)
+        OPENSSL_free(issuer_name_line);
     /* If no suitable signature algorithm can't use certificate */
     if (SSL_USE_SIGALGS(s) && !s->cert->key->digest)
         return 0;

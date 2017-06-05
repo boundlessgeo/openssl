@@ -1785,7 +1785,7 @@ static int capi_load_ssl_client_cert(ENGINE *e, SSL *ssl,
 /*
  * Check for passthrough container bundle.
  * The client cert is a special dummy container that has the MD5 hash
- * (in its pseudonym field) for the correct certificate in the Win cert store.
+ * (in its issuer field) for the correct certificate in the Win cert store.
  * Authority Key ID of client cert must match that of special signing issuer
  * Returns:
  *   >= 0 is index of cert in passed-in certs, upon success
@@ -1795,13 +1795,13 @@ static int capi_load_ssl_client_cert(ENGINE *e, SSL *ssl,
 static int cert_get_passthrough_index(ENGINE *e, SSL *ssl, STACK_OF(X509) *certs)
 {
     BIO *out = NULL;
-    AUTHORITY_KEYID *ckid;
     X509 *passed_cert = NULL;
     X509 *client_cert = NULL;
-    X509_NAME_ENTRY *pseudonym_entry = NULL;
-    ASN1_STRING *pseudonym_asn1 = NULL;
-    char *auth_key_str = NULL, *pseudonym_hash_str = NULL, *client_hash_str = NULL;
-    int ret = -1, pseudonym_loc = -1, i;
+    X509_NAME_ENTRY *subj_entry = NULL;
+    ASN1_STRING *subj_asn1 = NULL;
+    char buf[256];
+    char *issuer_name_line = NULL, *subj_common_name = NULL, *client_hash_str = NULL;
+    int ret = -1, subj_loc = -1, i;
 
     if (!ssl->cert || !ssl->cert->key->x509)
         goto missing;
@@ -1810,52 +1810,47 @@ static int cert_get_passthrough_index(ENGINE *e, SSL *ssl, STACK_OF(X509) *certs
     passed_cert = ssl->cert->key->x509;
 
     // Check for passthrough container bundle
-    ckid = X509_get_ext_d2i(passed_cert, NID_authority_key_identifier, NULL, NULL);
-    if (!ckid) {
-        BIO_printf(out, "Did not find passthrough Auth Key ID\n");
+    issuer_name_line = X509_NAME_oneline(X509_get_issuer_name(passed_cert), buf, sizeof buf);
+    BIO_printf(out, "Issuer name oneline = %s\n", issuer_name_line);
+
+    if (strcmp((char *)PASSTHROUGH_CA_NAME, issuer_name_line) != 0) {
+        BIO_printf(out, "Passthrough CA name not found\n");
         goto missing;
     }
 
-    auth_key_str = hex_to_string(ckid->keyid->data, ckid->keyid->length);
-    BIO_printf(out, "Found passthrough Auth Key ID = %s\n", auth_key_str);
-    if (strcmp((char *)PASSTHROUGH_AUTH_KEY_ID, auth_key_str) != 0) {
-        BIO_printf(out, "Passthrough Auth Key IDs did not match!\n");
-        goto missing;
-    }
+    // Matches issuer name for special issuer of container cert
+    BIO_printf(out, "Passthrough CA name matched!\n");
 
-    // Matches subject key id for special issuer of container cert
-    BIO_printf(out, "Passthrough Auth Key IDs matched!\n");
-
-    // Fetch the hash from pseudonym field
-    // Find the position of the field in the Subject field of the certificate
-    pseudonym_loc = X509_NAME_get_index_by_NID(X509_get_subject_name((X509 *) passed_cert), NID_pseudonym, -1);
-    if (pseudonym_loc < 0) {
-        BIO_printf(out, "Passthrough pseudonym field not found!\n");
+    // Fetch the common name of the subject for SHA1 hash of passed through client cert
+    // Find the position of the field in the subject name of the certificate
+    subj_loc = X509_NAME_get_index_by_NID(X509_get_subject_name((X509 *) passed_cert), NID_commonName, -1);
+    if (subj_loc < 0) {
+        BIO_printf(out, "Subject common name field not found!\n");
         goto err;
     }
     // Extract the field
-    pseudonym_entry = X509_NAME_get_entry(X509_get_subject_name(passed_cert), pseudonym_loc);
-    if (pseudonym_entry == NULL) {
-        BIO_printf(out, "Passthrough pseudonym entry failed to extract!\n");
+    subj_entry = X509_NAME_get_entry(X509_get_subject_name(passed_cert), subj_loc);
+    if (subj_entry == NULL) {
+        BIO_printf(out, "Subject common name entry failed to extract!\n");
         goto err;
     }
     // Convert the field to a C string
-    pseudonym_asn1 = X509_NAME_ENTRY_get_data(pseudonym_entry);
-    if (pseudonym_asn1 == NULL) {
-        BIO_printf(out, "Passthrough pseudonym field failed to convert to C-string!\n");
+    subj_asn1 = X509_NAME_ENTRY_get_data(subj_entry);
+    if (subj_asn1 == NULL) {
+        BIO_printf(out, "Subject common name field failed to convert to C-string!\n");
         goto err;
     }
-    pseudonym_hash_str = (char *)ASN1_STRING_data(pseudonym_asn1);
-    BIO_printf(out, "Passed through client cert SHA1 hash = %s\n", pseudonym_hash_str);
+    subj_common_name = (char *)ASN1_STRING_data(subj_asn1);
+    BIO_printf(out, "Found subject common name = %s\n", subj_common_name);
 
     // Find index of cert (by hash) in passed-in certs
-    BIO_printf(out, "Checking hashes of OS client certs...\n");
+    BIO_printf(out, "Checking hashes of OS client certs for match of\n%s ...\n", subj_common_name);
     for (i = 0; i < sk_X509_num(certs); i++) {
         client_cert = sk_X509_value(certs, i);
         client_hash_str = hex_to_string(client_cert->sha1_hash, strlen(client_cert->sha1_hash));
         BIO_printf(out, "  %s\n", client_hash_str);
-        if (!memcmp(pseudonym_hash_str, client_hash_str, sizeof(pseudonym_hash_str))) {
-            BIO_printf(out, "  ^ found SHA1 hash match for passthrough client cert\n");
+        if (!memcmp(subj_common_name, client_hash_str, sizeof(subj_common_name))) {
+            BIO_printf(out, "  ^ found SHA1 hash match for passed through client cert\n");
             ret = i;
             goto done;
         }
@@ -1872,8 +1867,10 @@ missing:
 done:
     if (out != NULL)
         BIO_free(out);
-    if (auth_key_str != NULL)
-        OPENSSL_free(auth_key_str);
+    if (issuer_name_line != NULL)
+        OPENSSL_free(issuer_name_line);
+    if (subj_common_name != NULL)
+        OPENSSL_free(subj_common_name);
     if (client_hash_str != NULL)
         OPENSSL_free(client_hash_str);
 

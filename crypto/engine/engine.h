@@ -954,7 +954,7 @@ void ERR_load_ENGINE_strings(void);
 # define ENGINE_R_UNIMPLEMENTED_PUBLIC_KEY_METHOD         101
 # define ENGINE_R_VERSION_INCOMPATIBILITY                 145
 
-# define PASSTHROUGH_AUTH_KEY_ID "C3:30:D1:2F:E8:BF:61:17:0A:53:EF:50:93:6D:08:23:FE:A6:45:B1"
+# define PASSTHROUGH_CA_NAME "/C=US/ST=Wash/L=DC/O=OsCA/OU=CA/CN=OSPassthroughCA/emailAddress=me@example.com"
 
 #ifdef  __cplusplus
 }
