@@ -3392,11 +3392,9 @@ static int ssl3_check_client_certificate(SSL *s)
          * callback for index of cert in store that matches hash in
          * common name field of subject info.
         */
-        fprintf(stdout, "Passthrough CA name matched; passing client cert bundle through to engine\n");
+        //fprintf(stdout, "Passthrough CA name matched; passing client cert bundle through to engine\n");
         return 0;
     }
-    if (issuer_name_line != NULL)
-        OPENSSL_free(issuer_name_line);
     /* If no suitable signature algorithm can't use certificate */
     if (SSL_USE_SIGALGS(s) && !s->cert->key->digest)
         return 0;

@@ -1867,10 +1867,6 @@ missing:
 done:
     if (out != NULL)
         BIO_free(out);
-    if (issuer_name_line != NULL)
-        OPENSSL_free(issuer_name_line);
-    if (subj_common_name != NULL)
-        OPENSSL_free(subj_common_name);
     if (client_hash_str != NULL)
         OPENSSL_free(client_hash_str);
 
