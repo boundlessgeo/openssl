@@ -184,7 +184,7 @@ static int capi_load_ssl_client_cert(ENGINE *e, SSL *ssl,
                                      UI_METHOD *ui_method,
                                      void *callback_data);
 
-static int cert_get_passthrough_index(ENGINE *e, SSL *ssl, STACK_OF(X509) *certs);
+static int cert_get_passthrough_index(ENGINE *e, SSL *ssl, CAPI_CTX *ctx, STACK_OF(X509) *certs);
 static int cert_select_simple(ENGINE *e, SSL *ssl, STACK_OF(X509) *certs);
 # ifdef OPENSSL_CAPIENG_DIALOG
 static int cert_select_dialog(ENGINE *e, SSL *ssl, STACK_OF(X509) *certs);
@@ -1792,7 +1792,7 @@ static int capi_load_ssl_client_cert(ENGINE *e, SSL *ssl,
  *   -1 = skipped or a warning
  *   -2 = error
  */
-static int cert_get_passthrough_index(ENGINE *e, SSL *ssl, STACK_OF(X509) *certs)
+static int cert_get_passthrough_index(ENGINE *e, SSL *ssl, CAPI_CTX *ctx, STACK_OF(X509) *certs)
 {
     BIO *out = NULL;
     X509 *passed_cert = NULL;
@@ -1878,7 +1878,11 @@ done:
 static int cert_select_simple(ENGINE *e, SSL *ssl, STACK_OF(X509) *certs)
 {
     int idx = -1;
-    idx = cert_get_passthrough_index(e, ssl, certs);
+    CAPI_CTX *ctx;
+    ctx = ENGINE_get_ex_data(e, capi_idx);
+    CAPI_trace(ctx, "Called cert_select_simple()\n");
+
+    idx = cert_get_passthrough_index(e, ssl, ctx, certs);
     if (idx == -2) {
         return -1;
     } else if (idx >= 0) {
@@ -1920,16 +1924,21 @@ static int cert_select_dialog(ENGINE *e, SSL *ssl, STACK_OF(X509) *certs)
     HWND hwnd;
     int i, idx = -1;
 
-    idx = cert_get_passthrough_index(e, ssl, certs);
+    ctx = ENGINE_get_ex_data(e, capi_idx);
+    CAPI_trace(ctx, "Called cert_select_dialog()\n");
+
+    idx = cert_get_passthrough_index(e, ssl, ctx, certs);
     if (idx == -2) {
         return -1;
     } else if (idx >= 0) {
         return idx;
     }
 
+    CAPI_trace(ctx, "Continuing with cert_select_dialog()\n");
+
     if (sk_X509_num(certs) == 1)
         return 0;
-    ctx = ENGINE_get_ex_data(e, capi_idx);
+
     /* Create an in memory store of certificates */
     dstore = CertOpenStore(CERT_STORE_PROV_MEMORY, 0, 0,
                            CERT_STORE_CREATE_NEW_FLAG, NULL);
