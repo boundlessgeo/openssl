@@ -1794,7 +1794,6 @@ static int capi_load_ssl_client_cert(ENGINE *e, SSL *ssl,
  */
 static int cert_get_passthrough_index(ENGINE *e, SSL *ssl, CAPI_CTX *ctx, STACK_OF(X509) *certs)
 {
-    BIO *out = NULL;
     X509 *passed_cert = NULL;
     X509 *client_cert = NULL;
     X509_NAME_ENTRY *subj_entry = NULL;
@@ -1803,54 +1802,58 @@ static int cert_get_passthrough_index(ENGINE *e, SSL *ssl, CAPI_CTX *ctx, STACK_
     char *issuer_name_line = NULL, *subj_common_name = NULL, *client_hash_str = NULL;
     int ret = -1, subj_loc = -1, i;
 
-    if (!ssl->cert || !ssl->cert->key->x509)
-        goto missing;
+    CAPI_trace(ctx, "Called cert_get_passthrough_index()\n");
 
-    out  = BIO_new_fp(stdout, BIO_NOCLOSE);
+    if (!ssl->cert || !ssl->cert->key->x509)
+    {
+        CAPI_trace(ctx, "Passthrough CA hash finding failed: null cert or key\n");
+        goto missing;
+    }
+
     passed_cert = ssl->cert->key->x509;
 
     // Check for passthrough container bundle
     issuer_name_line = X509_NAME_oneline(X509_get_issuer_name(passed_cert), buf, sizeof buf);
-    BIO_printf(out, "Issuer name oneline = %s\n", issuer_name_line);
+    CAPI_trace(ctx, "Issuer name oneline = %s\n", issuer_name_line);
 
     if (strcmp((char *)PASSTHROUGH_CA_NAME, issuer_name_line) != 0) {
-        BIO_printf(out, "Passthrough CA name not found\n");
+        CAPI_trace(ctx, "Passthrough CA hash finding comparison failed\n");
         goto missing;
     }
 
     // Matches issuer name for special issuer of container cert
-    BIO_printf(out, "Passthrough CA name matched!\n");
+    CAPI_trace(ctx, "Passthrough CA name matched\n");
 
     // Fetch the common name of the subject for SHA1 hash of passed through client cert
     // Find the position of the field in the subject name of the certificate
     subj_loc = X509_NAME_get_index_by_NID(X509_get_subject_name((X509 *) passed_cert), NID_commonName, -1);
     if (subj_loc < 0) {
-        BIO_printf(out, "Subject common name field not found!\n");
+        CAPI_trace(ctx, "Subject common name field not found!\n");
         goto err;
     }
     // Extract the field
     subj_entry = X509_NAME_get_entry(X509_get_subject_name(passed_cert), subj_loc);
     if (subj_entry == NULL) {
-        BIO_printf(out, "Subject common name entry failed to extract!\n");
+        CAPI_trace(ctx, "Subject common name entry failed to extract!\n");
         goto err;
     }
     // Convert the field to a C string
     subj_asn1 = X509_NAME_ENTRY_get_data(subj_entry);
     if (subj_asn1 == NULL) {
-        BIO_printf(out, "Subject common name field failed to convert to C-string!\n");
+        CAPI_trace(ctx, "Subject common name field failed to convert to C-string!\n");
         goto err;
     }
     subj_common_name = (char *)ASN1_STRING_data(subj_asn1);
-    BIO_printf(out, "Found subject common name = %s\n", subj_common_name);
+    CAPI_trace(ctx, "Found subject common name = %s\n", subj_common_name);
 
     // Find index of cert (by hash) in passed-in certs
-    BIO_printf(out, "Checking hashes of OS client certs for match of\n%s ...\n", subj_common_name);
+    CAPI_trace(ctx, "Checking hashes of OS client certs for match of\n%s ...\n", subj_common_name);
     for (i = 0; i < sk_X509_num(certs); i++) {
         client_cert = sk_X509_value(certs, i);
         client_hash_str = hex_to_string(client_cert->sha1_hash, strlen(client_cert->sha1_hash));
-        BIO_printf(out, "  %s\n", client_hash_str);
+        CAPI_trace(ctx, "  %s\n", client_hash_str);
         if (!memcmp(subj_common_name, client_hash_str, sizeof(subj_common_name))) {
-            BIO_printf(out, "  ^ found SHA1 hash match for passed through client cert\n");
+            CAPI_trace(ctx, "  ^ found SHA1 hash match for passed through client cert\n");
             ret = i;
             goto done;
         }
@@ -1858,15 +1861,15 @@ static int cert_get_passthrough_index(ENGINE *e, SSL *ssl, CAPI_CTX *ctx, STACK_
 
 err:
     ret = -2;
+    CAPI_trace(ctx, "Passthrough hash index FIND ERROR\n");
     goto done;
 
 missing:
     ret = -1;
+    CAPI_trace(ctx, "Passthrough hash NOT FOUND\n");
     goto done;
 
 done:
-    if (out != NULL)
-        BIO_free(out);
     if (client_hash_str != NULL)
         OPENSSL_free(client_hash_str);
 
