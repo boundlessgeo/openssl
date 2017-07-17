@@ -783,10 +783,13 @@ static EVP_PKEY *capi_load_privkey(ENGINE *eng, const char *key_id,
     if (!key)
         return NULL;
 
+    CAPI_trace(ctx, "Calling capi_get_pkey()\n");
     ret = capi_get_pkey(eng, key);
 
-    if (!ret)
+    if (!ret) {
+        CAPI_trace(ctx, "Calling capi_get_pkey() FAILED\n");
         capi_free_key(key);
+    }
     return ret;
 
 }
@@ -1493,6 +1496,7 @@ static CAPI_KEY *capi_get_cert_key(CAPI_CTX * ctx, PCCERT_CONTEXT cert)
     CAPI_KEY *key = NULL;
     CRYPT_KEY_PROV_INFO *pinfo = NULL;
     char *provname = NULL, *contname = NULL;
+    CAPI_trace(ctx, "Called capi_get_cert_key()\n");
     pinfo = capi_get_prov_info(ctx, cert);
     if (!pinfo)
         goto err;
@@ -1524,6 +1528,7 @@ CAPI_KEY *capi_find_key(CAPI_CTX * ctx, const char *id)
     PCCERT_CONTEXT cert;
     HCERTSTORE hstore;
     CAPI_KEY *key = NULL;
+    CAPI_trace(ctx, "Called capi_find_key()\n");
     switch (ctx->lookup_method) {
     case CAPI_LU_SUBSTR:
     case CAPI_LU_FNAME:
@@ -1658,6 +1663,7 @@ static int capi_ctx_set_provname_idx(CAPI_CTX * ctx, int idx)
     LPSTR pname;
     DWORD type;
     int res;
+    CAPI_trace(ctx, "Called capi_ctx_set_provname_idx()\n");
     if (capi_get_provname(ctx, &pname, &type, idx) != 1)
         return 0;
     res = capi_ctx_set_provname(ctx, pname, type, 0);
@@ -1699,6 +1705,8 @@ static int capi_load_ssl_client_cert(ENGINE *e, SSL *ssl,
 
     *pcert = NULL;
     *pkey = NULL;
+
+    CAPI_trace(ctx, "Called capi_load_ssl_client_cert()\n");
 
     storename = ctx->ssl_client_store;
     if (!storename)
@@ -1747,11 +1755,15 @@ static int capi_load_ssl_client_cert(ENGINE *e, SSL *ssl,
     if (hstore)
         CertCloseStore(hstore, 0);
 
-    if (!certs)
+    if (!certs) {
+        CAPI_trace(ctx, "Client certs associated with endpoint CAs NOT FOUND\n");
         return 0;
+    } else {
+        CAPI_trace(ctx, "Client certs associated with endpoint CAs found: %d\n", sk_X509_num(certs));
+    }
 
     /* Select the appropriate certificate */
-
+    CAPI_trace(ctx, "Calling ctx->client_cert_select()\n");
     client_cert_idx = ctx->client_cert_select(e, ssl, certs);
 
     /* Set the selected certificate and free the rest */
@@ -1769,13 +1781,19 @@ static int capi_load_ssl_client_cert(ENGINE *e, SSL *ssl,
 
     sk_X509_free(certs);
 
-    if (!*pcert)
+    if (!*pcert) {
+        CAPI_trace(ctx, "Associated client certs found, but none returned\n");
         return 0;
+    }
 
     /* Setup key for selected certificate */
 
     key = X509_get_ex_data(*pcert, cert_capi_idx);
+    CAPI_trace(ctx, "Calling capi_get_pkey() to setup key for selected certificate\n");
     *pkey = capi_get_pkey(e, key);
+    if (!*pkey) {
+        CAPI_trace(ctx, "Called capi_get_pkey(): FAILED to return key\n");
+    }
     X509_set_ex_data(*pcert, cert_capi_idx, NULL);
 
     return 1;
