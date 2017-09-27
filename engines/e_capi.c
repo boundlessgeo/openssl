@@ -141,6 +141,7 @@
 # include <openssl/engine.h>
 # include <openssl/pem.h>
 # include <openssl/x509v3.h>
+# include "ssl_locl.h"
 
 # include "e_capi_err.h"
 # include "e_capi_err.c"
@@ -187,6 +188,7 @@ static int capi_load_ssl_client_cert(ENGINE *e, SSL *ssl,
                                      UI_METHOD *ui_method,
                                      void *callback_data);
 
+static int cert_get_passthrough_index(ENGINE *e, SSL *ssl, CAPI_CTX *ctx, STACK_OF(X509) *certs);
 static int cert_select_simple(ENGINE *e, SSL *ssl, STACK_OF(X509) *certs);
 # ifdef OPENSSL_CAPIENG_DIALOG
 static int cert_select_dialog(ENGINE *e, SSL *ssl, STACK_OF(X509) *certs);
@@ -796,10 +798,13 @@ static EVP_PKEY *capi_load_privkey(ENGINE *eng, const char *key_id,
     if (!key)
         return NULL;
 
+    CAPI_trace(ctx, "Calling capi_get_pkey()\n");
     ret = capi_get_pkey(eng, key);
 
-    if (!ret)
+    if (!ret) {
+        CAPI_trace(ctx, "Calling capi_get_pkey() FAILED\n");
         capi_free_key(key);
+    }
     return ret;
 
 }
@@ -1511,6 +1516,7 @@ static CAPI_KEY *capi_get_cert_key(CAPI_CTX * ctx, PCCERT_CONTEXT cert)
     CAPI_KEY *key = NULL;
     CRYPT_KEY_PROV_INFO *pinfo = NULL;
 
+    CAPI_trace(ctx, "Called capi_get_cert_key()\n");
     pinfo = capi_get_prov_info(ctx, cert);
 
     if (pinfo != NULL)
@@ -1526,7 +1532,7 @@ CAPI_KEY *capi_find_key(CAPI_CTX * ctx, const char *id)
     PCCERT_CONTEXT cert;
     HCERTSTORE hstore;
     CAPI_KEY *key = NULL;
-
+    CAPI_trace(ctx, "Called capi_find_key()\n");
     switch (ctx->lookup_method) {
     case CAPI_LU_SUBSTR:
     case CAPI_LU_FNAME:
@@ -1649,6 +1655,7 @@ static int capi_ctx_set_provname_idx(CAPI_CTX * ctx, int idx)
     LPSTR pname;
     DWORD type;
     int res;
+    CAPI_trace(ctx, "Called capi_ctx_set_provname_idx()\n");
     if (capi_get_provname(ctx, &pname, &type, idx) != 1)
         return 0;
     res = capi_ctx_set_provname(ctx, pname, type, 0);
@@ -1690,6 +1697,8 @@ static int capi_load_ssl_client_cert(ENGINE *e, SSL *ssl,
 
     *pcert = NULL;
     *pkey = NULL;
+
+    CAPI_trace(ctx, "Called capi_load_ssl_client_cert()\n");
 
     storename = ctx->ssl_client_store;
     if (!storename)
@@ -1738,11 +1747,15 @@ static int capi_load_ssl_client_cert(ENGINE *e, SSL *ssl,
     if (hstore)
         CertCloseStore(hstore, 0);
 
-    if (!certs)
+    if (!certs) {
+        CAPI_trace(ctx, "Client certs associated with endpoint CAs NOT FOUND\n");
         return 0;
+    } else {
+        CAPI_trace(ctx, "Client certs associated with endpoint CAs found: %d\n", sk_X509_num(certs));
+    }
 
     /* Select the appropriate certificate */
-
+    CAPI_trace(ctx, "Calling ctx->client_cert_select()\n");
     client_cert_idx = ctx->client_cert_select(e, ssl, certs);
 
     /* Set the selected certificate and free the rest */
@@ -1760,23 +1773,135 @@ static int capi_load_ssl_client_cert(ENGINE *e, SSL *ssl,
 
     sk_X509_free(certs);
 
-    if (!*pcert)
+    if (!*pcert) {
+        CAPI_trace(ctx, "Associated client certs found, but none returned\n");
         return 0;
+    }
 
     /* Setup key for selected certificate */
 
     key = X509_get_ex_data(*pcert, cert_capi_idx);
+    CAPI_trace(ctx, "Calling capi_get_pkey() to setup key for selected certificate\n");
     *pkey = capi_get_pkey(e, key);
+    if (!*pkey) {
+        CAPI_trace(ctx, "Called capi_get_pkey(): FAILED to return key\n");
+    }
     X509_set_ex_data(*pcert, cert_capi_idx, NULL);
 
     return 1;
 
 }
 
+/*
+ * Check for passthrough container bundle.
+ * The client cert is a special dummy container that has the MD5 hash
+ * (in its issuer field) for the correct certificate in the Win cert store.
+ * Authority Key ID of client cert must match that of special signing issuer
+ * Returns:
+ *   >= 0 is index of cert in passed-in certs, upon success
+ *   -1 = skipped or a warning
+ *   -2 = error
+ */
+static int cert_get_passthrough_index(ENGINE *e, SSL *ssl, CAPI_CTX *ctx, STACK_OF(X509) *certs)
+{
+    X509 *passed_cert = NULL;
+    X509 *client_cert = NULL;
+    X509_NAME_ENTRY *subj_entry = NULL;
+    ASN1_STRING *subj_asn1 = NULL;
+    char buf[256];
+    char *issuer_name_line = NULL, *subj_common_name = NULL, *client_hash_str = NULL;
+    int ret = -1, subj_loc = -1, i;
+
+    CAPI_trace(ctx, "Called cert_get_passthrough_index()\n");
+
+    if (!ssl->cert || !ssl->cert->key->x509)
+    {
+        CAPI_trace(ctx, "Passthrough CA hash finding failed: null cert or key\n");
+        goto missing;
+    }
+
+    passed_cert = ssl->cert->key->x509;
+
+    // Check for passthrough container bundle
+    issuer_name_line = X509_NAME_oneline(X509_get_issuer_name(passed_cert), buf, sizeof buf);
+    CAPI_trace(ctx, "Issuer name oneline = %s\n", issuer_name_line);
+
+    if (strcmp((char *)PASSTHROUGH_CA_NAME, issuer_name_line) != 0) {
+        CAPI_trace(ctx, "Passthrough CA hash finding comparison failed\n");
+        goto missing;
+    }
+
+    // Matches issuer name for special issuer of container cert
+    CAPI_trace(ctx, "Passthrough CA name matched\n");
+
+    // Fetch the common name of the subject for SHA1 hash of passed through client cert
+    // Find the position of the field in the subject name of the certificate
+    subj_loc = X509_NAME_get_index_by_NID(X509_get_subject_name((X509 *) passed_cert), NID_commonName, -1);
+    if (subj_loc < 0) {
+        CAPI_trace(ctx, "Subject common name field not found!\n");
+        goto err;
+    }
+    // Extract the field
+    subj_entry = X509_NAME_get_entry(X509_get_subject_name(passed_cert), subj_loc);
+    if (subj_entry == NULL) {
+        CAPI_trace(ctx, "Subject common name entry failed to extract!\n");
+        goto err;
+    }
+    // Convert the field to a C string
+    subj_asn1 = X509_NAME_ENTRY_get_data(subj_entry);
+    if (subj_asn1 == NULL) {
+        CAPI_trace(ctx, "Subject common name field failed to convert to C-string!\n");
+        goto err;
+    }
+    subj_common_name = (char *)ASN1_STRING_data(subj_asn1);
+    CAPI_trace(ctx, "Found subject common name = %s\n", subj_common_name);
+
+    // Find index of cert (by hash) in passed-in certs
+    CAPI_trace(ctx, "Checking hashes of OS client certs for match of\n%s ...\n", subj_common_name);
+    for (i = 0; i < sk_X509_num(certs); i++) {
+        client_cert = sk_X509_value(certs, i);
+        client_hash_str = hex_to_string(client_cert->sha1_hash, strlen(client_cert->sha1_hash));
+        CAPI_trace(ctx, "  %s\n", client_hash_str);
+        if (!memcmp(subj_common_name, client_hash_str, sizeof(subj_common_name))) {
+            CAPI_trace(ctx, "  ^ found SHA1 hash match for passed through client cert\n");
+            ret = i;
+            goto done;
+        }
+    }
+
+err:
+    ret = -2;
+    CAPI_trace(ctx, "Passthrough hash index FIND ERROR\n");
+    goto done;
+
+missing:
+    ret = -1;
+    CAPI_trace(ctx, "Passthrough hash NOT FOUND\n");
+    goto done;
+
+done:
+    if (client_hash_str != NULL)
+        OPENSSL_free(client_hash_str);
+
+    return (ret);
+}
+
 /* Simple client cert selection function: always select first */
 
 static int cert_select_simple(ENGINE *e, SSL *ssl, STACK_OF(X509) *certs)
 {
+    int idx = -1;
+    CAPI_CTX *ctx;
+    ctx = ENGINE_get_ex_data(e, capi_idx);
+    CAPI_trace(ctx, "Called cert_select_simple()\n");
+
+    idx = cert_get_passthrough_index(e, ssl, ctx, certs);
+    if (idx == -2) {
+        return -1;
+    } else if (idx >= 0) {
+        return idx;
+    }
+
     return 0;
 }
 
@@ -1811,9 +1936,22 @@ static int cert_select_dialog(ENGINE *e, SSL *ssl, STACK_OF(X509) *certs)
     CAPI_KEY *key;
     HWND hwnd;
     int i, idx = -1;
+
+    ctx = ENGINE_get_ex_data(e, capi_idx);
+    CAPI_trace(ctx, "Called cert_select_dialog()\n");
+
+    idx = cert_get_passthrough_index(e, ssl, ctx, certs);
+    if (idx == -2) {
+        return -1;
+    } else if (idx >= 0) {
+        return idx;
+    }
+
+    CAPI_trace(ctx, "Continuing with cert_select_dialog()\n");
+
     if (sk_X509_num(certs) == 1)
         return 0;
-    ctx = ENGINE_get_ex_data(e, capi_idx);
+
     /* Create an in memory store of certificates */
     dstore = CertOpenStore(CERT_STORE_PROV_MEMORY, 0, 0,
                            CERT_STORE_CREATE_NEW_FLAG, NULL);
