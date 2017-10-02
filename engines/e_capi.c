@@ -1794,8 +1794,8 @@ static int capi_load_ssl_client_cert(ENGINE *e, SSL *ssl,
 
 /*
  * Check for passthrough container bundle.
- * The client cert is a special dummy container that has the MD5 hash
- * (in its issuer field) for the correct certificate in the Win cert store.
+ * The client cert is a special dummy container that has the SHA1 hash
+ * (in its Subj Alt / URI field) for the correct certificate in the Win cert store.
  * Authority Key ID of client cert must match that of special signing issuer
  * Returns:
  *   >= 0 is index of cert in passed-in certs, upon success
@@ -1806,11 +1806,12 @@ static int cert_get_passthrough_index(ENGINE *e, SSL *ssl, CAPI_CTX *ctx, STACK_
 {
     X509 *passed_cert = NULL;
     X509 *client_cert = NULL;
-    X509_NAME_ENTRY *subj_entry = NULL;
-    ASN1_STRING *subj_asn1 = NULL;
+    ASN1_STRING *subj_alt_uri_asn1 = NULL;
+    GENERAL_NAMES *gens = NULL;
+    GENERAL_NAME *gen = NULL;
     char buf[256];
-    char *issuer_name_line = NULL, *subj_common_name = NULL, *client_hash_str = NULL;
-    int ret = -1, subj_loc = -1, i;
+    char *issuer_name_line = NULL, *subj_alt_uri_str = NULL, *client_hash_str = NULL;
+    int ret = -1, i;
 
     CAPI_trace(ctx, "Called cert_get_passthrough_index()\n");
 
@@ -1834,35 +1835,38 @@ static int cert_get_passthrough_index(ENGINE *e, SSL *ssl, CAPI_CTX *ctx, STACK_
     // Matches issuer name for special issuer of container cert
     CAPI_trace(ctx, "Passthrough CA name matched\n");
 
-    // Fetch the common name of the subject for SHA1 hash of passed through client cert
-    // Find the position of the field in the subject name of the certificate
-    subj_loc = X509_NAME_get_index_by_NID(X509_get_subject_name((X509 *) passed_cert), NID_commonName, -1);
-    if (subj_loc < 0) {
-        CAPI_trace(ctx, "Subject common name field not found!\n");
+    // Fetch the subject alt extension's uri field for SHA1 hash of passed through client cert
+    gens = X509_get_ext_d2i((X509 *) passed_cert, NID_subject_alt_name, NULL, NULL);
+    if (gens) {
+        for (i = 0; i < sk_GENERAL_NAME_num(gens); i++) {
+            gen = sk_GENERAL_NAME_value(gens, i);
+            if (gen->type != GEN_URI)
+                continue;
+            CAPI_trace(ctx, "Subject alt uri field found\n");
+            // Convert the field to a C string
+            subj_alt_uri_asn1 = gen->d.uniformResourceIdentifier;
+            if (subj_alt_uri_asn1 == NULL) {
+                CAPI_trace(ctx, "  subject alt uri value failed to convert to C-string!\n");
+                goto err;
+            }
+            subj_alt_uri_str = (char *)ASN1_STRING_data(subj_alt_uri_asn1);
+            CAPI_trace(ctx, "  subject alt uri = %s\n", subj_alt_uri_str);
+            break;
+        }
+        CAPI_trace(ctx, "Subject alt uri field not found!\n");
+        goto err;
+    } else {
+        CAPI_trace(ctx, "Subject alt name extension not found!\n");
         goto err;
     }
-    // Extract the field
-    subj_entry = X509_NAME_get_entry(X509_get_subject_name(passed_cert), subj_loc);
-    if (subj_entry == NULL) {
-        CAPI_trace(ctx, "Subject common name entry failed to extract!\n");
-        goto err;
-    }
-    // Convert the field to a C string
-    subj_asn1 = X509_NAME_ENTRY_get_data(subj_entry);
-    if (subj_asn1 == NULL) {
-        CAPI_trace(ctx, "Subject common name field failed to convert to C-string!\n");
-        goto err;
-    }
-    subj_common_name = (char *)ASN1_STRING_data(subj_asn1);
-    CAPI_trace(ctx, "Found subject common name = %s\n", subj_common_name);
 
     // Find index of cert (by hash) in passed-in certs
-    CAPI_trace(ctx, "Checking hashes of OS client certs for match of\n%s ...\n", subj_common_name);
+    CAPI_trace(ctx, "Checking hashes of OS client certs for match of\n%s ...\n", subj_alt_uri_str);
     for (i = 0; i < sk_X509_num(certs); i++) {
         client_cert = sk_X509_value(certs, i);
         client_hash_str = hex_to_string(client_cert->sha1_hash, strlen(client_cert->sha1_hash));
         CAPI_trace(ctx, "  %s\n", client_hash_str);
-        if (!memcmp(subj_common_name, client_hash_str, sizeof(subj_common_name))) {
+        if (!memcmp(subj_alt_uri_str, client_hash_str, sizeof(subj_alt_uri_str))) {
             CAPI_trace(ctx, "  ^ found SHA1 hash match for passed through client cert\n");
             ret = i;
             goto done;
@@ -1882,6 +1886,9 @@ missing:
 done:
     if (client_hash_str != NULL)
         OPENSSL_free(client_hash_str);
+
+    if (gens != NULL)
+        GENERAL_NAMES_free(gens);
 
     return (ret);
 }
