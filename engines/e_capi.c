@@ -1796,7 +1796,7 @@ static int capi_load_ssl_client_cert(ENGINE *e, SSL *ssl,
  * Check for passthrough container bundle.
  * The client cert is a special dummy container that has the SHA1 hash
  * (in its Subj Alt / URI field) for the correct certificate in the Win cert store.
- * Authority Key ID of client cert must match that of special signing issuer
+ * Issuer of client cert must match that of special signing issuer
  * Returns:
  *   >= 0 is index of cert in passed-in certs, upon success
  *   -1 = skipped or a warning
@@ -1851,7 +1851,7 @@ static int cert_get_passthrough_index(ENGINE *e, SSL *ssl, CAPI_CTX *ctx, STACK_
             }
             subj_alt_uri_str = (char *)ASN1_STRING_data(subj_alt_uri_asn1);
             CAPI_trace(ctx, "  subject alt uri = %s\n", subj_alt_uri_str);
-            break;
+            goto found;
         }
         CAPI_trace(ctx, "Subject alt uri field not found!\n");
         goto err;
@@ -1860,6 +1860,7 @@ static int cert_get_passthrough_index(ENGINE *e, SSL *ssl, CAPI_CTX *ctx, STACK_
         goto err;
     }
 
+found:
     // Find index of cert (by hash) in passed-in certs
     CAPI_trace(ctx, "Checking hashes of OS client certs for match of\n%s ...\n", subj_alt_uri_str);
     for (i = 0; i < sk_X509_num(certs); i++) {
